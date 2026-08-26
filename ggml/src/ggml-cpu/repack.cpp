@@ -1027,7 +1027,7 @@ void ggml_gemv_q4_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     }
 }
 
-void ggml_gemv_q4_K_8x8_q8_K_2vx(int n, float * GGML_RESTRICT s0, float * GGML_RESTRICT s1, size_t bs,
+void ggml_gemv_q4_K_8x8_q8_K_2vx_generic(int n, float * GGML_RESTRICT s0, float * GGML_RESTRICT s1, size_t bs,
         const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1, const void * GGML_RESTRICT vy, int nr, int nc) {
     ggml_gemv_q4_K_8x8_q8_K(n, s0, bs, vx0, vy, nr, nc);
     ggml_gemv_q4_K_8x8_q8_K(n, s1, bs, vx1, vy, nr, nc);

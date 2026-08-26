@@ -150,6 +150,8 @@ void ggml_gemv_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 // MoE decode: two expert weight blocks, one shared activation column (top-2, n_token=1).
 void ggml_gemv_q4_K_8x8_q8_K_2vx(int n, float * GGML_RESTRICT s0, float * GGML_RESTRICT s1, size_t bs,
     const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1, const void * GGML_RESTRICT vy, int nr, int nc);
+void ggml_gemv_q4_K_8x8_q8_K_2vx_generic(int n, float * GGML_RESTRICT s0, float * GGML_RESTRICT s1, size_t bs,
+    const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemv_q5_K_8x4_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemv_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemv_q6_K_8x4_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
@@ -202,6 +204,8 @@ void ggml_gemv_q4_0_8x8_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 void ggml_gemv_q2_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemv_q4_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemv_q4_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
+void ggml_gemv_q4_K_8x8_q8_K_2vx_generic(int n, float * GGML_RESTRICT s0, float * GGML_RESTRICT s1, size_t bs,
+    const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemv_q5_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemv_q5_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemv_q6_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
