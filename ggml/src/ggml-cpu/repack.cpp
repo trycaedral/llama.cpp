@@ -15,6 +15,7 @@
 #include <cstring>
 #include <cassert>
 #include <cstdio>  // for GGML_ASSERT
+#include <type_traits>
 
 #include "repack.h"
 
@@ -1024,6 +1025,12 @@ void ggml_gemv_q4_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
             s[x * ncols_interleaved + j] = sumf[j] - sum_minf[j];
         }
     }
+}
+
+void ggml_gemv_q4_K_8x8_q8_K_2vx(int n, float * GGML_RESTRICT s0, float * GGML_RESTRICT s1, size_t bs,
+        const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemv_q4_K_8x8_q8_K(n, s0, bs, vx0, vy, nr, nc);
+    ggml_gemv_q4_K_8x8_q8_K(n, s1, bs, vx1, vy, nr, nc);
 }
 
 void ggml_gemv_q2_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
@@ -4468,6 +4475,58 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
         ggml_barrier(params->threadpool);
 
+        int64_t src0_cur_start = (ith * ne01) / nth;
+        int64_t src0_cur_end   = ((ith + 1) * ne01) / nth;
+
+        // Align boundaries to NB_COLS - round up to ensure all data is included
+        src0_cur_start = (src0_cur_start % NB_COLS) ? src0_cur_start + NB_COLS - (src0_cur_start % NB_COLS) : src0_cur_start;
+        src0_cur_end   = (src0_cur_end   % NB_COLS) ? src0_cur_end   + NB_COLS - (src0_cur_end   % NB_COLS) : src0_cur_end;
+        if (src0_cur_end > ne01) {
+            src0_cur_end = ne01;
+        }
+
+        if (src0_cur_start >= src0_cur_end) {
+            return;
+        }
+
+        const int64_t gemv_nc = src0_cur_end - src0_cur_start;
+
+        // MoE decode fast path: top-2 experts, single token (LFM2-class shapes).
+        if constexpr (std::is_same_v<BLOC_TYPE, block_q4_K> && NB_COLS == 8 && INTER_SIZE == 8) {
+            if (n_ids == 2 && ne12 == 1 && ne11 == 1) {
+                int active[2] = { -1, -1 };
+                int n_active = 0;
+                for (int cur_a = 0; cur_a < n_as && n_active < 2; ++cur_a) {
+                    if (matrix_row_counts[cur_a] > 0) {
+                        active[n_active++] = cur_a;
+                    }
+                }
+                if (n_active == 2 &&
+                        matrix_row_counts[active[0]] == 1 &&
+                        matrix_row_counts[active[1]] == 1) {
+                    const int ea = active[0];
+                    const int eb = active[1];
+                    const struct mmid_row_mapping row_a = MMID_MATRIX_ROW(ea, 0);
+                    const struct mmid_row_mapping row_b = MMID_MATRIX_ROW(eb, 0);
+                    const int64_t i1a = row_a.i1;
+                    const int64_t i2a = row_a.i2;
+                    const int64_t i1b = row_b.i1;
+                    const int64_t i2b = row_b.i2;
+                    const auto * src1_col = (const char *) wdata + (i1a % ne11) * nbw1 + i2a * nbw2;
+                    const auto * src0_a = (const char *) src0->data + ea * nb02;
+                    const auto * src0_b = (const char *) src0->data + eb * nb02;
+                    float * dst_a = (float *) ((char *) dst->data + (i1a * nb1 + i2a * nb2)) + src0_cur_start;
+                    float * dst_b = (float *) ((char *) dst->data + (i1b * nb1 + i2b * nb2)) + src0_cur_start;
+                    ggml_gemv_q4_K_8x8_q8_K_2vx(
+                            ne00, dst_a, dst_b, ne01,
+                            src0_a + src0_cur_start * nb01,
+                            src0_b + src0_cur_start * nb01,
+                            src1_col, 1, gemv_nc);
+                    return;
+                }
+            }
+        }
+
         // compute each matrix multiplication in sequence
         for (int cur_a = 0; cur_a < n_as; ++cur_a) {
             const int64_t cne1 = matrix_row_counts[cur_a];
@@ -4480,20 +4539,6 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
             //const int64_t nr0 = ne01; // src0 rows
             const int64_t nr1 = cne1; // src1 rows
-
-            int64_t src0_cur_start = (ith * ne01) / nth;
-            int64_t src0_cur_end   = ((ith + 1) * ne01) / nth;
-
-            // Align boundaries to NB_COLS - round up to ensure all data is included
-            src0_cur_start = (src0_cur_start % NB_COLS) ? src0_cur_start + NB_COLS - (src0_cur_start % NB_COLS) : src0_cur_start;
-            src0_cur_end   = (src0_cur_end   % NB_COLS) ? src0_cur_end   + NB_COLS - (src0_cur_end   % NB_COLS) : src0_cur_end;
-            if (src0_cur_end > ne01) {
-                src0_cur_end = ne01;
-            }
-
-            if (src0_cur_start >= src0_cur_end) {
-                return;
-            }
 
             for (int ir1 = 0; ir1 < nr1; ir1++) {
                 struct mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, ir1);
@@ -4510,7 +4555,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
                 gemv<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(
                     ne00, (float *) ((char *) dst->data + (i1 * nb1 + i2 * nb2)) + src0_cur_start, ne01,
-                    src0_cur + src0_cur_start * nb01, src1_col, 1, src0_cur_end - src0_cur_start);
+                    src0_cur + src0_cur_start * nb01, src1_col, 1, gemv_nc);
             }
         }
 #undef MMID_MATRIX_ROW
