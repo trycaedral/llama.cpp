@@ -26,14 +26,16 @@
 
 #define UNUSED GGML_UNUSED
 
-// CNE MoE B3 fused GEMV (top-2/top-4 decode). On by default; set CNE_MOE_B3=0
-// to force the generic mul_mat_id slow path for A/B benchmarking.
-static bool ggml_cpu_moe_b3_enabled() {
+// CNE custom ggml-cpu kernels (lossless; default on). One knob for all fork hooks in this file:
+//   CNE_KERNELS=1 — q8 activation cache, MoE mul_mat_id dispatch, fused q4/q6 2vx/4vx GEMV
+//   CNE_KERNELS=0 — stock llama.cpp mul_mat_id path (A/B benchmarking)
+static bool ggml_cpu_cne_kernels_enabled() {
     static int cached = -1;
     if (cached >= 0) {
         return cached != 0;
     }
-    const char * v = getenv("CNE_MOE_B3");
+
+    const char * v = getenv("CNE_KERNELS");
     if (!v || !*v) {
         cached = 1;
         return true;
@@ -1158,8 +1160,29 @@ void ggml_gemv_q6_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     ggml_gemv_q6_K_NxM_q8_K_generic_impl<4, 8>(n, s, bs, vx, vy, nr, nc);
 }
 
+#undef ggml_gemv_q6_K_8x8_q8_K_generic
+#undef ggml_gemv_q6_K_8x8_q8_K_2vx_generic
+#undef ggml_gemv_q6_K_8x8_q8_K_4vx_generic
+
 void ggml_gemv_q6_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     ggml_gemv_q6_K_NxM_q8_K_generic_impl<8, 8>(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemv_q6_K_8x8_q8_K_2vx_generic(int n, float * GGML_RESTRICT s0, float * GGML_RESTRICT s1, size_t bs,
+        const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1, const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemv_q6_K_8x8_q8_K(n, s0, bs, vx0, vy, nr, nc);
+    ggml_gemv_q6_K_8x8_q8_K(n, s1, bs, vx1, vy, nr, nc);
+}
+
+void ggml_gemv_q6_K_8x8_q8_K_4vx_generic(int n, float * GGML_RESTRICT s0, float * GGML_RESTRICT s1,
+        float * GGML_RESTRICT s2, float * GGML_RESTRICT s3, size_t bs,
+        const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1,
+        const void * GGML_RESTRICT vx2, const void * GGML_RESTRICT vx3,
+        const void * GGML_RESTRICT vy, int nr, int nc) {
+    ggml_gemv_q6_K_8x8_q8_K(n, s0, bs, vx0, vy, nr, nc);
+    ggml_gemv_q6_K_8x8_q8_K(n, s1, bs, vx1, vy, nr, nc);
+    ggml_gemv_q6_K_8x8_q8_K(n, s2, bs, vx2, vy, nr, nc);
+    ggml_gemv_q6_K_8x8_q8_K(n, s3, bs, vx3, vy, nr, nc);
 }
 
 void ggml_gemv_iq4_nl_4x4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
@@ -4490,7 +4513,8 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             char buf[32768];
         } q8_act_cache;
 
-        const bool q8_cacheable = (ne12 == 1 && ne11 == 1 && nbw3 <= sizeof(q8_act_cache.buf));
+        const bool q8_cacheable = ggml_cpu_cne_kernels_enabled() &&
+            (ne12 == 1 && ne11 == 1 && nbw3 <= sizeof(q8_act_cache.buf));
         const bool q8_cache_hit = q8_cacheable &&
             q8_act_cache.src_key == src1->data &&
             q8_act_cache.ne10_k == ne10 &&
@@ -4563,8 +4587,9 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         const int64_t gemv_nc = src0_cur_end - src0_cur_start;
 
         // MoE decode fast path: top-K experts, single token (LFM2 = top-4).
-        if constexpr (std::is_same_v<BLOC_TYPE, block_q4_K> && NB_COLS == 8 && INTER_SIZE == 8) {
-            if (ggml_cpu_moe_b3_enabled() && (n_ids == 2 || n_ids == 4) && ne12 == 1 && ne11 == 1) {
+        if constexpr ((std::is_same_v<BLOC_TYPE, block_q4_K> || std::is_same_v<BLOC_TYPE, block_q6_K>) &&
+                      NB_COLS == 8 && INTER_SIZE == 8) {
+            if (ggml_cpu_cne_kernels_enabled() && (n_ids == 2 || n_ids == 4) && ne12 == 1 && ne11 == 1) {
                 int active[4] = { -1, -1, -1, -1 };
                 int n_active = 0;
                 for (int cur_a = 0; cur_a < n_as && n_active < n_ids; ++cur_a) {
@@ -4596,10 +4621,17 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
                                 dst_ptr[i] = (float *) ((char *) dst->data +
                                         (row[i].i1 * nb1 + row[i].i2 * nb2)) + src0_cur_start;
                             }
-                            ggml_gemv_q4_K_8x8_q8_K_4vx(
-                                    ne00, dst_ptr[0], dst_ptr[1], dst_ptr[2], dst_ptr[3], ne01,
-                                    src0_ptr[0], src0_ptr[1], src0_ptr[2], src0_ptr[3],
-                                    src1_col, 1, gemv_nc);
+                            if constexpr (std::is_same_v<BLOC_TYPE, block_q4_K>) {
+                                ggml_gemv_q4_K_8x8_q8_K_4vx(
+                                        ne00, dst_ptr[0], dst_ptr[1], dst_ptr[2], dst_ptr[3], ne01,
+                                        src0_ptr[0], src0_ptr[1], src0_ptr[2], src0_ptr[3],
+                                        src1_col, 1, gemv_nc);
+                            } else {
+                                ggml_gemv_q6_K_8x8_q8_K_4vx(
+                                        ne00, dst_ptr[0], dst_ptr[1], dst_ptr[2], dst_ptr[3], ne01,
+                                        src0_ptr[0], src0_ptr[1], src0_ptr[2], src0_ptr[3],
+                                        src1_col, 1, gemv_nc);
+                            }
                             return;
                         }
                         if (n_ids == 2) {
@@ -4616,11 +4648,19 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
                             const auto * src0_b = (const char *) src0->data + eb * nb02;
                             float * dst_a = (float *) ((char *) dst->data + (i1a * nb1 + i2a * nb2)) + src0_cur_start;
                             float * dst_b = (float *) ((char *) dst->data + (i1b * nb1 + i2b * nb2)) + src0_cur_start;
-                            ggml_gemv_q4_K_8x8_q8_K_2vx(
-                                    ne00, dst_a, dst_b, ne01,
-                                    src0_a + src0_cur_start * nb01,
-                                    src0_b + src0_cur_start * nb01,
-                                    src1_col2, 1, gemv_nc);
+                            if constexpr (std::is_same_v<BLOC_TYPE, block_q4_K>) {
+                                ggml_gemv_q4_K_8x8_q8_K_2vx(
+                                        ne00, dst_a, dst_b, ne01,
+                                        src0_a + src0_cur_start * nb01,
+                                        src0_b + src0_cur_start * nb01,
+                                        src1_col2, 1, gemv_nc);
+                            } else {
+                                ggml_gemv_q6_K_8x8_q8_K_2vx(
+                                        ne00, dst_a, dst_b, ne01,
+                                        src0_a + src0_cur_start * nb01,
+                                        src0_b + src0_cur_start * nb01,
+                                        src1_col2, 1, gemv_nc);
+                            }
                             return;
                         }
                     }
