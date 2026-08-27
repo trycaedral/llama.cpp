@@ -15,6 +15,7 @@
 #include <cstring>
 #include <cassert>
 #include <cstdio>  // for GGML_ASSERT
+#include <cstdlib>
 #include <type_traits>
 
 #include "repack.h"
@@ -24,6 +25,30 @@
 #endif
 
 #define UNUSED GGML_UNUSED
+
+// CNE MoE B3 fused GEMV (top-2/top-4 decode). On by default; set CNE_MOE_B3=0
+// to force the generic mul_mat_id slow path for A/B benchmarking.
+static bool ggml_cpu_moe_b3_enabled() {
+    static int cached = -1;
+    if (cached >= 0) {
+        return cached != 0;
+    }
+    const char * v = getenv("CNE_MOE_B3");
+    if (!v || !*v) {
+        cached = 1;
+        return true;
+    }
+    if (v[0] == '0' && v[1] == '\0') {
+        cached = 0;
+        return false;
+    }
+    if (strcmp(v, "false") == 0 || strcmp(v, "off") == 0 || strcmp(v, "no") == 0) {
+        cached = 0;
+        return false;
+    }
+    cached = 1;
+    return true;
+}
 
 static inline int nearest_int(float fval) {
     assert(fabsf(fval) <= 4194303.f);
@@ -4539,7 +4564,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
         // MoE decode fast path: top-K experts, single token (LFM2 = top-4).
         if constexpr (std::is_same_v<BLOC_TYPE, block_q4_K> && NB_COLS == 8 && INTER_SIZE == 8) {
-            if ((n_ids == 2 || n_ids == 4) && ne12 == 1 && ne11 == 1) {
+            if (ggml_cpu_moe_b3_enabled() && (n_ids == 2 || n_ids == 4) && ne12 == 1 && ne11 == 1) {
                 int active[4] = { -1, -1, -1, -1 };
                 int n_active = 0;
                 for (int cur_a = 0; cur_a < n_as && n_active < n_ids; ++cur_a) {
