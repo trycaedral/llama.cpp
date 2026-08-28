@@ -4349,6 +4349,8 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             }
         }
 
+#include "cne/mul_mat_decode.inl"
+
         // disable for NUMA
         const bool disable_chunking = ggml_is_numa();
 

@@ -14,6 +14,8 @@ Caedral Notre Engine hooks inside ggml-cpu. All CNE-owned kernel code lives here
 | `config.h` | `ggml_cpu_cne_kernels_enabled()` |
 | `q8_act_cache.inl` | Reuse q8 activations when MoE gate/up share `src1` |
 | `moe_fast_path.inl` | Top-2/4 `mul_mat_id` decode dispatch → fused GEMV |
+| `mul_mat_decode.inl` | Single-token `MUL_MAT` decode (shortconv, attn, dense) |
+| `shortconv/README.md` | Shortconv-specific notes and backlog |
 | `arch/x86/gemv_q4_moe.inl` | AVX2 q4_K fused `2vx`/`4vx` MoE GEMV |
 | `arch/x86/gemv_q6_moe.inl` | AVX2 q6_K fused `2vx`/`4vx` MoE GEMV |
 
